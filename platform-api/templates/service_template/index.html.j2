@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 动态报表</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0a0e17;
+            min-height: 100vh;
+            color: #e2e8f0;
+        }
+        
+        .brand-header {
+            background: linear-gradient(135deg, #1e3a5f 0%, #0d1b2a 100%);
+            border-bottom: 1px solid rgba(56, 189, 248, 0.3);
+        }
+        
+        .glass-card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(56, 189, 248, 0.15);
+            border-radius: 16px;
+        }
+        
+        .stat-value {
+            background: linear-gradient(135deg, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .conclusion-box {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(139, 92, 246, 0.15) 100%);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            border-left: 4px solid #8b5cf6;
+        }
+        
+        .export-btn {
+            background: linear-gradient(135deg, #10b981, #059669);
+            transition: all 0.3s ease;
+        }
+        
+        .export-btn:hover {
+            background: linear-gradient(135deg, #059669, #047857);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
+        }
+        
+        .refresh-btn {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            transition: all 0.3s ease;
+        }
+        
+        .refresh-btn:hover {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4);
+        }
+        
+        .refresh-btn.spinning svg {
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        
+        .data-table th {
+            background: rgba(15, 23, 42, 0.8);
+            padding: 14px 16px;
+            text-align: left;
+            font-weight: 500;
+            color: #94a3b8;
+            font-size: 13px;
+            border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+            position: sticky;
+            top: 0;
+        }
+        
+        .data-table td {
+            padding: 14px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 14px;
+        }
+        
+        .data-table tbody tr:hover {
+            background: rgba(56, 189, 248, 0.08);
+        }
+        
+        .rank-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        
+        .rank-1 { background: linear-gradient(135deg, #ef4444, #f87171); }
+        .rank-2 { background: linear-gradient(135deg, #f97316, #fb923c); }
+        .rank-3 { background: linear-gradient(135deg, #eab308, #facc15); }
+        .rank-other { background: rgba(71, 85, 105, 0.6); color: #94a3b8; }
+        
+        .unbalance-tag {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        
+        .unbalance-critical { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        .unbalance-high { background: rgba(249, 115, 22, 0.2); color: #fb923c; }
+        .unbalance-medium { background: rgba(234, 179, 8, 0.2); color: #facc15; }
+        .unbalance-normal { background: rgba(34, 211, 238, 0.2); color: #22d3ee; }
+        
+        .floor-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .floor-f1 { background: rgba(168, 85, 247, 0.2); color: #c084fc; }
+        .floor-f2 { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .floor-f3 { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+        .floor-f4 { background: rgba(234, 179, 8, 0.2); color: #facc15; }
+        .floor-f5 { background: rgba(249, 115, 22, 0.2); color: #fb923c; }
+        .floor-f6 { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        .floor-f7 { background: rgba(236, 72, 153, 0.2); color: #f472b6; }
+        
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            z-index: 9999;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.3s ease;
+        }
+        
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        
+        .toast.success { background: linear-gradient(135deg, #10b981, #059669); }
+        .toast.error { background: linear-gradient(135deg, #ef4444, #dc2626); }
+        .toast.info { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+    </style>
+</head>
+<body>
+    <!-- 品牌头部 -->
+    <header class="brand-header">
+        <div class="max-w-7xl mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-6">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="text-sm text-gray-400">世纪互联</div>
+                            <div class="text-lg font-semibold text-white">21Vianet</div>
+                        </div>
+                    </div>
+                    
+                    <div class="h-10 w-px bg-gray-700"></div>
+                    
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="text-sm text-gray-400">数据中心运维</div>
+                            <div class="text-lg font-semibold text-white">DC Operations</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex items-center gap-4">
+                    <div class="text-right">
+                        <div class="text-sm text-gray-400">数据刷新时间</div>
+                        <div class="text-cyan-400 font-mono" id="refreshTime">{{ refresh_time }}</div>
+                    </div>
+                    <button onclick="refreshData()" id="refreshBtn" class="refresh-btn flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium cursor-pointer">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        刷新数据
+                    </button>
+                    <button onclick="exportToExcel()" id="exportBtn" class="export-btn flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium cursor-pointer">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        导出Excel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-6 py-8">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-white mb-2">🔌 {{ title }}</h1>
+            <p class="text-gray-400">{{ datacenter }} · 实时监测 · 动态刷新</p>
+            <div class="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gray-800 text-xs text-gray-400">
+                <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                自动刷新中
+            </div>
+        </div>
+
+        <!-- 核心结论 -->
+        <div class="conclusion-box rounded-xl p-6 mb-8">
+            <h3 class="text-lg font-semibold text-purple-400 mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                核心结论
+            </h3>
+            <div class="grid md:grid-cols-3 gap-6" id="conclusionBox">
+                <div class="flex items-start gap-3">
+                    <span class="text-2xl">🚨</span>
+                    <div>
+                        <div class="text-red-400 font-semibold">紧急处理 ({{ summary.urgent_count or 0 }}台)</div>
+                        <div class="text-sm text-gray-300 mt-1">不平衡度≥40%设备存在严重负载不均<br>需立即安排检修</div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-3">
+                    <span class="text-2xl">⚠️</span>
+                    <div>
+                        <div class="text-orange-400 font-semibold">重点关注 ({{ summary.focus_count or 0 }}台)</div>
+                        <div class="text-sm text-gray-300 mt-1">不平衡度>15%设备<br>建议优化负载分配</div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-3">
+                    <span class="text-2xl">📊</span>
+                    <div>
+                        <div class="text-cyan-400 font-semibold">整体评估 ({{ summary.valid_count or 0 }}台)</div>
+                        <div class="text-sm text-gray-300 mt-1">平均不平衡度{{ summary.avg_unbalance or 0 }}%<br>异常率{{ summary.abnormal_pct or 0 }}%，需持续监控</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="statCards">
+            <div class="glass-card p-5 text-center">
+                <div class="text-sm text-gray-400 mb-2">有效设备</div>
+                <div class="text-3xl font-bold stat-value" id="statValidCount">{{ summary.valid_count or 0 }}</div>
+                <div class="text-xs text-gray-500 mt-1">台</div>
+            </div>
+            <div class="glass-card p-5 text-center">
+                <div class="text-sm text-gray-400 mb-2">平均不平衡度</div>
+                <div class="text-3xl font-bold stat-value" id="statAvgUnbalance">{{ summary.avg_unbalance or 0 }}%</div>
+                <div class="text-xs text-gray-500 mt-1">正常阈值15%</div>
+            </div>
+            <div class="glass-card p-5 text-center">
+                <div class="text-sm text-gray-400 mb-2">最大不平衡度</div>
+                <div class="text-3xl font-bold text-red-400" id="statMaxUnbalance">{{ summary.max_unbalance or 0 }}%</div>
+                <div class="text-xs text-gray-500 mt-1">{{ summary.max_device or '' }}</div>
+            </div>
+            <div class="glass-card p-5 text-center">
+                <div class="text-sm text-gray-400 mb-2">异常设备</div>
+                <div class="text-3xl font-bold text-orange-400" id="statAbnormalCount">{{ summary.abnormal_count or 0 }}</div>
+                <div class="text-xs text-gray-500 mt-1">占比 {{ summary.abnormal_pct or 0 }}%</div>
+            </div>
+        </div>
+
+        <!-- 数据表格 -->
+        <div class="glass-card overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                    <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                    </svg>
+                    异常设备清单 (不平衡度 > 15%)
+                </h2>
+                <span class="text-xs text-gray-500 bg-gray-800 px-3 py-1 rounded-full" id="tableCount">共 {{ devices|length }} 台</span>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th class="w-16">排名</th>
+                            <th>设备名称</th>
+                            <th>楼层</th>
+                            <th class="text-right">A相(A)</th>
+                            <th class="text-right">B相(A)</th>
+                            <th class="text-right">C相(A)</th>
+                            <th class="text-right">总电流(A)</th>
+                            <th class="text-right">不平衡度</th>
+                        </tr>
+                    </thead>
+                    <tbody id="abnormalTable">
+                        {% for item in devices %}
+                        <tr>
+                            <td>
+                                <span class="rank-badge {% if item.rank == 1 %}rank-1{% elif item.rank == 2 %}rank-2{% elif item.rank == 3 %}rank-3{% else %}rank-other{% endif %}">
+                                    {{ item.rank }}
+                                </span>
+                            </td>
+                            <td class="font-medium text-white">{{ item.insName }}</td>
+                            <td><span class="floor-tag floor-{{ item.floor|lower }}">{{ item.floor }}</span></td>
+                            <td class="text-right text-cyan-300">{{ item.A }}</td>
+                            <td class="text-right text-cyan-300">{{ item.B }}</td>
+                            <td class="text-right text-cyan-300">{{ item.C }}</td>
+                            <td class="text-right font-mono">{{ item.total }}</td>
+                            <td class="text-right">
+                                <span class="unbalance-tag 
+                                    {% if item.unbalance >= 40 %}unbalance-critical
+                                    {% elif item.unbalance >= 30 %}unbalance-high
+                                    {% elif item.unbalance >= 20 %}unbalance-medium
+                                    {% else %}unbalance-normal{% endif %}">
+                                    {{ item.unbalance }}%
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="text-center mt-8 text-gray-500 text-sm">
+            <p>世纪互联 · DC运维智能监控平台 · 数据来源：智航CMDB · 动态刷新</p>
+        </div>
+    </main>
+
+    <!-- Toast通知 -->
+    <div id="toast" class="toast"></div>
+
+    <script>
+        // 当前数据
+        let abnormalData = {{ devices|tojson|safe }};
+        let summaryData = {{ summary|tojson|safe }};
+        
+        // 自动刷新间隔（5分钟）
+        const REFRESH_INTERVAL = 300000;
+        let refreshTimer = null;
+        
+        // 显示Toast
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type}`;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+        
+        // 刷新数据
+        async function refreshData() {
+            const btn = document.getElementById('refreshBtn');
+            btn.classList.add('spinning');
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('./api/data');
+                const result = await response.json();
+                
+                if (result.success) {
+                    abnormalData = result.devices;
+                    summaryData = result.summary;
+                    
+                    // 更新统计卡片
+                    updateStatCards(summaryData);
+                    
+                    // 更新表格
+                    updateTable(abnormalData);
+                    
+                    // 更新刷新时间
+                    document.getElementById('refreshTime').textContent = result.refresh_time;
+                    
+                    showToast('数据刷新成功', 'success');
+                } else {
+                    showToast(result.message || '刷新失败', 'error');
+                }
+            } catch (error) {
+                console.error('刷新失败:', error);
+                showToast('刷新失败: ' + error.message, 'error');
+            } finally {
+                btn.classList.remove('spinning');
+                btn.disabled = false;
+            }
+        }
+        
+        // 更新统计卡片
+        function updateStatCards(summary) {
+            document.getElementById('statValidCount').textContent = summary.valid_count || 0;
+            document.getElementById('statAvgUnbalance').textContent = (summary.avg_unbalance || 0) + '%';
+            document.getElementById('statMaxUnbalance').textContent = (summary.max_unbalance || 0) + '%';
+            document.getElementById('statAbnormalCount').textContent = summary.abnormal_count || 0;
+            document.getElementById('tableCount').textContent = `共 ${abnormalData.length} 台`;
+            
+            // 更新结论
+            updateConclusions(summary);
+        }
+        
+        // 更新结论
+        function updateConclusions(summary) {
+            const box = document.getElementById('conclusionBox');
+            box.innerHTML = `
+                <div class="flex items-start gap-3">
+                    <span class="text-2xl">🚨</span>
+                    <div>
+                        <div class="text-red-400 font-semibold">紧急处理 (${summary.urgent_count || 0}台)</div>
+                        <div class="text-sm text-gray-300 mt-1">不平衡度≥40%设备存在严重负载不均<br>需立即安排检修</div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-3">
+                    <span class="text-2xl">⚠️</span>
+                    <div>
+                        <div class="text-orange-400 font-semibold">重点关注 (${summary.focus_count || 0}台)</div>
+                        <div class="text-sm text-gray-300 mt-1">不平衡度>15%设备<br>建议优化负载分配</div>
+                    </div>
+                </div>
+                <div class="flex items-start gap-3">
+                    <span class="text-2xl">📊</span>
+                    <div>
+                        <div class="text-cyan-400 font-semibold">整体评估 (${summary.valid_count || 0}台)</div>
+                        <div class="text-sm text-gray-300 mt-1">平均不平衡度${summary.avg_unbalance || 0}%<br>异常率${summary.abnormal_pct || 0}%，需持续监控</div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // 获取楼层样式
+        function getFloorClass(floor) {
+            const floorMap = {
+                'F1': 'floor-f1', 'F2': 'floor-f2', 'F3': 'floor-f3',
+                'F4': 'floor-f4', 'F5': 'floor-f5', 'F6': 'floor-f6', 'F7': 'floor-f7'
+            };
+            return floorMap[floor] || 'floor-f1';
+        }
+        
+        // 获取不平衡度样式
+        function getUnbalanceClass(unbalance) {
+            if (unbalance >= 40) return 'unbalance-critical';
+            if (unbalance >= 30) return 'unbalance-high';
+            if (unbalance >= 20) return 'unbalance-medium';
+            return 'unbalance-normal';
+        }
+        
+        // 获取排名样式
+        function getRankClass(rank) {
+            if (rank === 1) return 'rank-1';
+            if (rank === 2) return 'rank-2';
+            if (rank === 3) return 'rank-3';
+            return 'rank-other';
+        }
+        
+        // 更新表格
+        function updateTable(devices) {
+            const tbody = document.getElementById('abnormalTable');
+            tbody.innerHTML = devices.map(item => `
+                <tr>
+                    <td><span class="rank-badge ${getRankClass(item.rank)}">${item.rank}</span></td>
+                    <td class="font-medium text-white">${item.insName}</td>
+                    <td><span class="floor-tag ${getFloorClass(item.floor)}">${item.floor}</span></td>
+                    <td class="text-right text-cyan-300">${item.A}</td>
+                    <td class="text-right text-cyan-300">${item.B}</td>
+                    <td class="text-right text-cyan-300">${item.C}</td>
+                    <td class="text-right font-mono">${item.total}</td>
+                    <td class="text-right"><span class="unbalance-tag ${getUnbalanceClass(item.unbalance)}">${item.unbalance}%</span></td>
+                </tr>
+            `).join('');
+        }
+        
+        // 导出Excel
+        function exportToExcel() {
+            const btn = document.getElementById('exportBtn');
+            const originalContent = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> 导出中...';
+            btn.disabled = true;
+            
+            try {
+                const wb = XLSX.utils.book_new();
+                
+                const wsData = [
+                    ['序号', '设备名称', '楼层', 'A相电流(A)', 'B相电流(A)', 'C相电流(A)', '总电流(A)', '不平衡度(%)', '风险等级']
+                ];
+                
+                abnormalData.forEach(item => {
+                    let risk = '低';
+                    if (item.unbalance >= 40) risk = '紧急';
+                    else if (item.unbalance >= 30) risk = '高';
+                    else if (item.unbalance >= 20) risk = '中';
+                    
+                    wsData.push([
+                        item.rank, item.insName, item.floor,
+                        item.A, item.B, item.C, item.total,
+                        item.unbalance, risk
+                    ]);
+                });
+                
+                const ws = XLSX.utils.aoa_to_sheet(wsData);
+                ws['!cols'] = [
+                    {wch: 6}, {wch: 28}, {wch: 8}, {wch: 14},
+                    {wch: 14}, {wch: 14}, {wch: 12}, {wch: 14}, {wch: 10}
+                ];
+                
+                XLSX.utils.book_append_sheet(wb, ws, '不平衡度异常设备');
+                
+                const fileName = `{{ title }}_异常设备清单_${new Date().toISOString().slice(0,10)}.xlsx`;
+                XLSX.writeFile(wb, fileName);
+                
+                btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> 导出成功!';
+                showToast('Excel导出成功', 'success');
+                
+                setTimeout(() => {
+                    btn.innerHTML = originalContent;
+                    btn.disabled = false;
+                }, 2000);
+                
+            } catch (error) {
+                console.error('导出失败:', error);
+                showToast('导出失败: ' + error.message, 'error');
+                btn.innerHTML = originalContent;
+                btn.disabled = false;
+            }
+        }
+        
+        // 启动自动刷新
+        function startAutoRefresh() {
+            refreshTimer = setInterval(refreshData, REFRESH_INTERVAL);
+        }
+        
+        // 页面可见性变化时处理
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                refreshData();
+                if (!refreshTimer) startAutoRefresh();
+            } else {
+                if (refreshTimer) {
+                    clearInterval(refreshTimer);
+                    refreshTimer = null;
+                }
+            }
+        });
+        
+        // 初始化
+        startAutoRefresh();
+    </script>
+</body>
+</html>

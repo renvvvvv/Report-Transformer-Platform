@@ -1,0 +1,42 @@
+version: "3.8"
+
+services:
+  # Nginx 反向代理网关
+  nginx:
+    build: ./nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./services:/var/www/services:ro
+    depends_on:
+      - platform-api
+    networks:
+      - report-platform
+    restart: unless-stopped
+
+  # 平台管理API
+  platform-api:
+    build: ./platform-api
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./services:/app/services
+      - ./uploads:/app/uploads
+      - ./nginx/conf.d:/app/nginx_conf
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - FLASK_ENV=production
+      - SERVICES_DIR=/app/services
+      - UPLOADS_DIR=/app/uploads
+      - NGINX_CONF_DIR=/app/nginx_conf
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    networks:
+      - report-platform
+    restart: unless-stopped
+
+networks:
+  report-platform:
+    driver: bridge

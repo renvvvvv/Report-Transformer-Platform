@@ -1,0 +1,172 @@
+# -*- coding: utf-8 -*-
+"""
+计算模块
+数据处理和业务逻辑计算
+"""
+
+import re
+from typing import Dict, List, Any, Optional
+
+
+class Calculator:
+    """业务计算器"""
+    
+    def __init__(self, config: Dict = None):
+        self.config = config or {}
+        self.thresholds = self.config.get('thresholds', {})
+        self.filters = self.config.get('filters', [])
+    
+    {% if formula %}
+    def calculate(self, a: float, b: float, c: float) -> Optional[float]:
+        """
+        计算核心指标
+        公式: {{ formula }}
+        """
+        if a is None or b is None or c is None:
+            return None
+        
+        max_val = max(a, b, c)
+        min_val = min(a, b, c)
+        avg_val = (a + b + c) / 3.0
+        
+        if max_val == 0:
+            return 0.0
+        
+        # {{ formula_description or '计算公式' }}
+        result = (max_val - min_val) / max_val * 100
+        return round(result, 2)
+    {% else %}
+    def calculate(self, *values) -> Optional[float]:
+        """通用计算"""
+        if not values or any(v is None for v in values):
+            return None
+        return 0.0
+    {% endif %}
+    
+    def process_devices(self, devices: List[Dict], realtime_data: Dict,
+                        device_points_map: Dict) -> List[Dict]:
+        """
+        处理所有设备数据
+        
+        Returns:
+            处理后的设备列表，按指标排序
+        """
+        results = []
+        
+        for device in devices:
+            ins_id = device.get('insStandardId') or device.get('insId')
+            ins_name = device.get('insName', 'Unknown')
+            
+            # 提取楼层信息
+            floor = self._extract_floor(ins_name)
+            
+            # 获取该设备的点位映射
+            points = device_points_map.get(ins_id, {})
+            
+            # 获取实时数据
+            currents = {'A': 0, 'B': 0, 'C': 0}
+            for phase in ['A', 'B', 'C']:
+                pt_info = points.get(phase)
+                if pt_info and pt_info.get('ins_pt_id'):
+                    pt_data = realtime_data.get(pt_info['ins_pt_id'], {})
+                    try:
+                        currents[phase] = float(pt_data.get('reported_value', 0))
+                    except:
+                        currents[phase] = 0
+            
+            a, b, c = currents['A'], currents['B'], currents['C']
+            total_current = a + b + c
+            
+            # 应用过滤条件
+            {% if filters %}
+            # 过滤规则:
+            {% for filter in filters %}
+            # - {{ filter }}
+            {% endfor %}
+            if total_current < 10:  # 最小电流过滤
+                continue
+            
+            if a <= 0 or b <= 0 or c <= 0:
+                continue
+            {% endif %}
+            
+            # 计算指标
+            metric = self.calculate(a, b, c)
+            if metric is None:
+                continue
+            
+            results.append({
+                'ins_id': ins_id,
+                'insName': ins_name,
+                'floor': floor,
+                'A': round(a, 2),
+                'B': round(b, 2),
+                'C': round(c, 2),
+                'total': round(total_current, 2),
+                'unbalance': metric,
+                'is_abnormal': self.is_abnormal(metric)
+            })
+        
+        # 按指标降序排序
+        results.sort(key=lambda x: x['unbalance'], reverse=True)
+        
+        # 添加排名
+        for i, r in enumerate(results):
+            r['rank'] = i + 1
+        
+        return results
+    
+    def calculate_summary(self, devices: List[Dict]) -> Dict[str, Any]:
+        """计算汇总统计"""
+        if not devices:
+            return {
+                'valid_count': 0,
+                'avg_unbalance': 0,
+                'max_unbalance': 0,
+                'max_device': '',
+                'abnormal_count': 0,
+                'abnormal_pct': 0,
+                'urgent_count': 0,
+                'focus_count': 0
+            }
+        
+        unbalances = [d['unbalance'] for d in devices]
+        abnormal_devices = [d for d in devices if d['is_abnormal']]
+        
+        # 风险等级统计
+        urgent_count = len([d for d in devices if d['unbalance'] >= 40])
+        focus_count = len([d for d in devices if d['unbalance'] >= 15])
+        
+        return {
+            'valid_count': len(devices),
+            'avg_unbalance': round(sum(unbalances) / len(unbalances), 2),
+            'max_unbalance': round(max(unbalances), 2),
+            'max_device': devices[0]['insName'] if devices else '',
+            'abnormal_count': len(abnormal_devices),
+            'abnormal_pct': round(len(abnormal_devices) / len(devices) * 100, 1),
+            'urgent_count': urgent_count,
+            'focus_count': focus_count
+        }
+    
+    def is_abnormal(self, value: float) -> bool:
+        """判断是否异常"""
+        threshold = self.thresholds.get('abnormal', 15)
+        return value > threshold
+    
+    def get_risk_level(self, value: float) -> str:
+        """获取风险等级"""
+        if value >= 40:
+            return '紧急'
+        elif value >= 30:
+            return '高'
+        elif value >= 20:
+            return '中'
+        else:
+            return '低'
+    
+    def _extract_floor(self, ins_name: str) -> str:
+        """从设备名称提取楼层"""
+        match = re.search(r'F(\d+)', ins_name)
+        if match:
+            return f"F{match.group(1)}"
+        return "未知"

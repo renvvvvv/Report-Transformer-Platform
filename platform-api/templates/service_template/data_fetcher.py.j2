@@ -1,0 +1,185 @@
+# -*- coding: utf-8 -*-
+"""
+数据拉取模块
+从数据源获取原始数据
+"""
+
+import os
+import json
+import requests
+from requests.auth import HTTPBasicAuth
+from typing import Dict, List, Any, Optional
+
+
+class DataFetcher:
+    """数据拉取器"""
+    
+    {% if data_source.type == 'zhihang-cmdb' %}
+    # 智航CMDB配置
+    INTERNAL_BASE_URL = '{{ data_source.base_url or 'http://gateway.meta42.indc.vnet.com' }}'
+    EXTERNAL_BASE_URL = 'https://digitaltwin.meta42.indc.vnet.com/openapi'
+    
+    def __init__(self, username: str = 'root', password: str = 'taosdata', use_internal: bool = False):
+        self.base_url = self.INTERNAL_BASE_URL if use_internal else self.EXTERNAL_BASE_URL
+        self.auth = HTTPBasicAuth(username, password)
+        self.session = requests.Session()
+        self.session.auth = self.auth
+    
+    def _post(self, path: str, data: Any = None, timeout: int = 180) -> Dict:
+        """发送POST请求"""
+        url = f'{self.base_url}{path}'
+        try:
+            response = self.session.post(url, json=data, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"[ERROR] API请求失败: {url} - {str(e)}")
+            return {}
+    
+    def get_devices_by_domain_and_obj(self, domain_code: str, obj_ids: List[str], 
+                                       page: int = 1, size: int = 600) -> List[Dict]:
+        """获取设备列表"""
+        payload = {
+            "page": page,
+            "size": size,
+            "objIds": obj_ids,
+            "domainCode": domain_code,
+            "isQueryProperties": False,
+            "isQueryPointData": False
+        }
+        result = self._post('/cmdb/insRemote/getInsByDomainCodeAndObjIds', payload)
+        
+        if isinstance(result, dict):
+            return result.get('data', {}).get('list', result.get('list', []))
+        return result if isinstance(result, list) else []
+    
+    def get_point_list_by_instance(self, ins_standard_ids: List[str]) -> List[Dict]:
+        """获取点位列表"""
+        result = self._post('/cmdb/insRemote/getPointDataByInsStandardIds', ins_standard_ids)
+        if isinstance(result, list):
+            return result
+        return result.get('data', []) if isinstance(result, dict) else []
+    
+    def get_realtime_data(self, point_ids: List[str]) -> Dict[str, Any]:
+        """获取实时数据"""
+        result = self._post('/device_twin/reported/list', point_ids)
+        if isinstance(result, dict):
+            return result.get('data', result)
+        return result if isinstance(result, dict) else {}
+    
+    {% else %}
+    # 通用HTTP API配置
+    def __init__(self, base_url: str = '', auth: Dict = None):
+        self.base_url = base_url
+        self.auth = auth or {}
+        self.session = requests.Session()
+    
+    def fetch(self, endpoint: str, method: str = 'GET', data: Any = None) -> Any:
+        """通用数据获取"""
+        url = f'{self.base_url}{endpoint}'
+        try:
+            if method.upper() == 'POST':
+                response = self.session.post(url, json=data, timeout=60)
+            else:
+                response = self.session.get(url, timeout=60)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"[ERROR] 数据获取失败: {url} - {str(e)}")
+            return {}
+    {% endif %}
+    
+    def fetch_all_data(self, domain_code: str, obj_ids: List[str], 
+                       point_mapping: Dict[str, str] = None) -> Dict[str, Any]:
+        """
+        拉取完整数据流程
+        
+        Returns:
+            {
+                'devices': [...],
+                'points': [...],
+                'realtime': {...},
+                'device_points_map': {...}
+            }
+        """
+        print(f"[INFO] 开始拉取数据: domain={domain_code}, obj_ids={obj_ids}")
+        
+        # 1. 获取设备列表
+        devices = self.get_devices_by_domain_and_obj(domain_code, obj_ids)
+        print(f"[INFO] 获取到 {len(devices)} 台设备")
+        
+        if not devices:
+            return {'devices': [], 'points': [], 'realtime': {}, 'device_points_map': {}}
+        
+        # 2. 获取点位列表
+        ins_standard_ids = []
+        for d in devices:
+            ins_id = d.get('insStandardId') or d.get('insId')
+            if ins_id:
+                ins_standard_ids.append(ins_id)
+        
+        all_points = self.get_point_list_by_instance(ins_standard_ids)
+        print(f"[INFO] 获取到 {len(all_points)} 个点位")
+        
+        # 3. 构建设备点位映射
+        device_points_map = self._build_device_points_map(devices, all_points, point_mapping)
+        
+        # 4. 收集所有点位ID
+        all_point_ids = []
+        for ins_id, phases in device_points_map.items():
+            for phase, point_info in phases.items():
+                if point_info and point_info.get('ins_pt_id'):
+                    all_point_ids.append(point_info['ins_pt_id'])
+        
+        # 5. 批量获取实时数据
+        realtime_data = {}
+        batch_size = 100
+        for i in range(0, len(all_point_ids), batch_size):
+            batch = all_point_ids[i:i+batch_size]
+            batch_data = self.get_realtime_data(batch)
+            if isinstance(batch_data, dict):
+                realtime_data.update(batch_data)
+            print(f"[INFO] 批量获取实时数据: {i+1}-{min(i+batch_size, len(all_point_ids))}/{len(all_point_ids)}")
+        
+        print(f"[INFO] 获取到 {len(realtime_data)} 条实时数据")
+        
+        return {
+            'devices': devices,
+            'points': all_points,
+            'realtime': realtime_data,
+            'device_points_map': device_points_map
+        }
+    
+    def _build_device_points_map(self, devices: List[Dict], all_points: List[Dict],
+                                  point_mapping: Dict[str, str] = None) -> Dict[str, Dict]:
+        """构建设备点位映射"""
+        if point_mapping is None:
+            point_mapping = {{ config.point_mapping or {} }}
+        
+        device_map = {}
+        for device in devices:
+            ins_id = device.get('insStandardId') or device.get('insId')
+            device_map[ins_id] = {'A': None, 'B': None, 'C': None}
+        
+        for point in all_points:
+            ins_standard_id = point.get('insStandardId')
+            extends_name = point.get('extendsName', '')
+            
+            if not ins_standard_id or ins_standard_id not in device_map:
+                continue
+            
+            point_info = {
+                'ins_pt_id': point.get('insPointStandardId'),
+                'obj_pt_id': point.get('objPointDataId'),
+                'extends_name': extends_name
+            }
+            
+            # 根据extendsName或point_mapping匹配相位
+            if 'A' in extends_name or extends_name == point_mapping.get('A'):
+                device_map[ins_standard_id]['A'] = point_info
+            elif 'B' in extends_name or extends_name == point_mapping.get('B'):
+                device_map[ins_standard_id]['B'] = point_info
+            elif 'C' in extends_name or extends_name == point_mapping.get('C'):
+                device_map[ins_standard_id]['C'] = point_info
+        
+        return device_map

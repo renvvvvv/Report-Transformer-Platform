@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  {{ service_name }}:
+    build: ./app
+    container_name: {{ service_name }}
+    ports:
+      - "{{ port }}:5000"
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ./cache:/app/cache
+    environment:
+      - FLASK_ENV=production
+      - SERVICE_NAME={{ service_name }}
+      - SERVICE_PATH={{ service_path }}
+    networks:
+      - report-platform
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  report-platform:
+    external: true

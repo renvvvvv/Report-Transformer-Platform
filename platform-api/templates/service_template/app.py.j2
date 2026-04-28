@@ -1,0 +1,271 @@
+# -*- coding: utf-8 -*-
+"""
+动态报表服务
+{{ service_title }}
+
+自动生成于 {{ now }}
+"""
+
+import os
+import sys
+import json
+import traceback
+from datetime import datetime
+from typing import Dict, List, Any
+
+from flask import Flask, render_template, jsonify, request
+from flask_cors import CORS
+from apscheduler.schedulers.background import BackgroundScheduler
+
+# 导入数据模块
+from data_fetcher import DataFetcher
+from calculator import Calculator
+
+# ========== 配置 ==========
+SERVICE_NAME = os.getenv('SERVICE_NAME', '{{ service_name }}')
+SERVICE_PATH = os.getenv('SERVICE_PATH', '{{ path }}')
+DATACENTER = '{{ datacenter }}'
+
+# 数据中心配置
+DATACENTER_CONFIG = {
+    {% for name, domain in (config.datacenters or {}).items() %}
+    '{{ name }}': '{{ domain }}',
+    {% endfor %}
+}
+
+# 设备模型ID
+OBJ_IDS = {{ config.obj_ids or ['OBJ-361'] }}
+
+# 点位映射
+POINT_MAPPING = {{ config.point_mapping or {'A': '1.1.7.1', 'B': '1.1.8.1', 'C': '1.1.9.1'} }}
+
+# 刷新配置
+REFRESH_CRON = '{{ refresh_cron }}'
+
+# ========== 初始化Flask ==========
+app = Flask(__name__)
+CORS(app)
+
+# 处理子路径部署
+class ReverseProxied:
+    def __init__(self, app):
+        self.app = app
+    
+    def __call__(self, environ, start_response):
+        script_name = environ.get('HTTP_X_FORWARDED_PREFIX', '') or SERVICE_PATH
+        if script_name:
+            environ['SCRIPT_NAME'] = script_name
+            path_info = environ.get('PATH_INFO', '')
+            if path_info.startswith(script_name):
+                environ['PATH_INFO'] = path_info[len(script_name):]
+        return self.app(environ, start_response)
+
+app.wsgi_app = ReverseProxied(app.wsgi_app)
+
+# ========== 全局数据缓存 ==========
+cache = {
+    'devices': [],
+    'summary': {},
+    'last_update': None,
+    'is_updating': False
+}
+
+# ========== 定时任务 ==========
+scheduler = BackgroundScheduler()
+
+def refresh_data():
+    """定时刷新数据"""
+    if cache['is_updating']:
+        print("[WARN] 上一次刷新尚未完成，跳过本次")
+        return
+    
+    cache['is_updating'] = True
+    print(f"[INFO] 开始刷新数据: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    try:
+        # 1. 拉取数据
+        fetcher = DataFetcher(use_internal=False)
+        
+        # 获取domainCode
+        domain_code = DATACENTER_CONFIG.get(DATACENTER, '73')
+        
+        raw_data = fetcher.fetch_all_data(
+            domain_code=domain_code,
+            obj_ids=OBJ_IDS,
+            point_mapping=POINT_MAPPING
+        )
+        
+        # 2. 计算处理
+        calculator = Calculator(config={
+            'thresholds': {{ calculation.thresholds or {'abnormal': 15, 'critical': 40} }},
+            'filters': {{ calculation.filters or [] }}
+        })
+        
+        devices = calculator.process_devices(
+            raw_data['devices'],
+            raw_data['realtime'],
+            raw_data['device_points_map']
+        )
+        
+        summary = calculator.calculate_summary(devices)
+        
+        # 3. 更新缓存
+        cache['devices'] = devices
+        cache['summary'] = summary
+        cache['last_update'] = datetime.now()
+        
+        # 4. 保存到文件（持久化）
+        save_cache()
+        
+        print(f"[INFO] 数据刷新完成: {len(devices)} 台设备, 平均不平衡度 {summary.get('avg_unbalance', 0)}%")
+    
+    except Exception as e:
+        print(f"[ERROR] 数据刷新失败: {str(e)}")
+        print(traceback.format_exc())
+    
+    finally:
+        cache['is_updating'] = False
+
+def save_cache():
+    """保存缓存到文件"""
+    try:
+        cache_file = '/app/cache/data_cache.json'
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                'devices': cache['devices'],
+                'summary': cache['summary'],
+                'last_update': cache['last_update'].isoformat() if cache['last_update'] else None
+            }, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[WARN] 缓存保存失败: {e}")
+
+def load_cache():
+    """从文件加载缓存"""
+    try:
+        cache_file = '/app/cache/data_cache.json'
+        if os.path.exists(cache_file):
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                cache['devices'] = data.get('devices', [])
+                cache['summary'] = data.get('summary', {})
+                if data.get('last_update'):
+                    cache['last_update'] = datetime.fromisoformat(data['last_update'])
+                print(f"[INFO] 从缓存加载: {len(cache['devices'])} 台设备")
+    except Exception as e:
+        print(f"[WARN] 缓存加载失败: {e}")
+
+# ========== 路由 ==========
+
+@app.route('/')
+def index():
+    """主页面 - 渲染动态报表"""
+    summary = cache.get('summary', {})
+    devices = cache.get('devices', [])
+    
+    # 只返回异常设备用于表格展示
+    abnormal_devices = [d for d in devices if d.get('is_abnormal', False)]
+    
+    return render_template('index.html',
+        title='{{ service_title }}',
+        summary=summary,
+        devices=abnormal_devices,
+        all_devices=devices,
+        refresh_time=cache['last_update'].strftime('%Y-%m-%d %H:%M:%S') if cache['last_update'] else '--',
+        datacenter=DATACENTER,
+        total_devices=len(devices),
+        abnormal_count=len(abnormal_devices)
+    )
+
+@app.route('/api/data')
+def api_data():
+    """数据API - 供前端动态刷新"""
+    summary = cache.get('summary', {})
+    devices = cache.get('devices', [])
+    abnormal_devices = [d for d in devices if d.get('is_abnormal', False)]
+    
+    return jsonify({
+        'success': True,
+        'service': SERVICE_NAME,
+        'datacenter': DATACENTER,
+        'summary': summary,
+        'devices': abnormal_devices,
+        'total_devices': len(devices),
+        'abnormal_count': len(abnormal_devices),
+        'refresh_time': cache['last_update'].strftime('%Y-%m-%d %H:%M:%S') if cache['last_update'] else '--',
+        'is_updating': cache['is_updating']
+    })
+
+@app.route('/api/refresh', methods=['POST'])
+def api_refresh():
+    """手动触发数据刷新"""
+    if cache['is_updating']:
+        return jsonify({
+            'success': False,
+            'message': '数据刷新中，请稍后再试'
+        }), 429
+    
+    refresh_data()
+    
+    return jsonify({
+        'success': True,
+        'message': '刷新完成',
+        'summary': cache.get('summary', {}),
+        'refresh_time': cache['last_update'].strftime('%Y-%m-%d %H:%M:%S') if cache['last_update'] else '--'
+    })
+
+@app.route('/api/devices')
+def api_devices():
+    """获取所有设备数据"""
+    return jsonify({
+        'success': True,
+        'devices': cache.get('devices', []),
+        'count': len(cache.get('devices', []))
+    })
+
+@app.route('/api/config')
+def api_config():
+    """获取服务配置"""
+    return jsonify({
+        'success': True,
+        'service_name': SERVICE_NAME,
+        'datacenter': DATACENTER,
+        'refresh_cron': REFRESH_CRON,
+        'last_update': cache['last_update'].isoformat() if cache['last_update'] else None,
+        'thresholds': {{ calculation.thresholds or {'abnormal': 15, 'critical': 40} }}
+    })
+
+@app.route('/health')
+def health():
+    """健康检查"""
+    return jsonify({
+        'status': 'healthy',
+        'service': SERVICE_NAME,
+        'last_update': cache['last_update'].isoformat() if cache['last_update'] else None,
+        'device_count': len(cache.get('devices', []))
+    })
+
+# ========== 启动 ==========
+
+if __name__ == '__main__':
+    # 加载缓存
+    load_cache()
+    
+    # 首次刷新
+    if not cache['devices']:
+        print("[INFO] 首次运行，立即刷新数据...")
+        refresh_data()
+    
+    # 启动定时任务
+    scheduler.add_job(
+        func=refresh_data,
+        trigger='cron',
+        minute='5',
+        hour='2',
+        id='daily_refresh'
+    )
+    scheduler.start()
+    print(f"[INFO] 定时任务已启动: {REFRESH_CRON}")
+    
+    # 启动Flask
+    app.run(host='0.0.0.0', port=5000, debug=False)
