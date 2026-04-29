@@ -164,19 +164,25 @@ CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "app:app"]
     def build_service(self, service_name: str) -> bool:
         """构建服务Docker镜像"""
         service_dir = os.path.join(self.services_base_dir, service_name)
+        app_dir = os.path.join(service_dir, 'app')
         
-        if not os.path.exists(service_dir):
+        if not os.path.exists(service_dir) or not os.path.exists(app_dir):
             return False
         
         import subprocess
         try:
+            # Use docker build directly (no docker-compose available)
+            image_name = f"report-service-{service_name.lower().replace(' ', '-').replace('_', '-')}"
             result = subprocess.run(
-                ['docker-compose', 'build'],
-                cwd=service_dir,
+                ['docker', 'build', '-t', image_name, '.'],
+                cwd=app_dir,
                 capture_output=True,
                 text=True,
                 timeout=300
             )
+            if result.returncode != 0:
+                print(f"构建输出: {result.stdout}")
+                print(f"构建错误: {result.stderr}")
             return result.returncode == 0
         except Exception as e:
             print(f"构建服务失败: {e}")
@@ -190,14 +196,44 @@ CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "app:app"]
             return False
         
         import subprocess
+        import yaml
+        
         try:
+            # Read compose config to get port
+            compose_path = os.path.join(service_dir, 'docker-compose.yml')
+            port = 5000
+            if os.path.exists(compose_path):
+                with open(compose_path, 'r') as f:
+                    compose = yaml.safe_load(f)
+                for svc in compose.get('services', {}).values():
+                    for port_mapping in svc.get('ports', []):
+                        if isinstance(port_mapping, str):
+                            port = int(port_mapping.split(':')[0])
+                            break
+            
+            image_name = f"report-service-{service_name.lower().replace(' ', '-').replace('_', '-')}"
+            container_name = f"report-svc-{service_name.lower().replace(' ', '-').replace('_', '-')}"
+            
+            # Run container directly with docker run
             result = subprocess.run(
-                ['docker-compose', 'up', '-d'],
-                cwd=service_dir,
+                [
+                    'docker', 'run', '-d',
+                    '--name', container_name,
+                    '--network', 'report-transformer-platform_report-platform',
+                    '-p', f'{port}:5000',
+                    '-v', f'{service_dir}/config.yml:/app/config.yml:ro',
+                    '-e', f'SERVICE_NAME={service_name}',
+                    '-e', 'FLASK_ENV=production',
+                    '--restart', 'unless-stopped',
+                    image_name
+                ],
                 capture_output=True,
                 text=True,
                 timeout=60
             )
+            if result.returncode != 0:
+                print(f"启动输出: {result.stdout}")
+                print(f"启动错误: {result.stderr}")
             return result.returncode == 0
         except Exception as e:
             print(f"启动服务失败: {e}")
@@ -205,16 +241,13 @@ CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "app:app"]
     
     def stop_service(self, service_name: str) -> bool:
         """停止服务"""
-        service_dir = os.path.join(self.services_base_dir, service_name)
-        
-        if not os.path.exists(service_dir):
-            return False
-        
         import subprocess
+        
+        container_name = f"report-svc-{service_name.lower().replace(' ', '-').replace('_', '-')}"
+        
         try:
             result = subprocess.run(
-                ['docker-compose', 'down'],
-                cwd=service_dir,
+                ['docker', 'rm', '-f', container_name],
                 capture_output=True,
                 text=True,
                 timeout=60

@@ -208,8 +208,18 @@ def full_deploy():
         
         for fname in os.listdir(skill_dir):
             fpath = os.path.join(skill_dir, fname)
-            with open(fpath, 'r', encoding='utf-8') as f:
-                content = f.read()
+            
+            # Skip binary files and hidden files
+            if fname.startswith('.') or fname.endswith('.pyc') or fname.endswith('.DS_Store'):
+                continue
+            
+            # Try to read as text, skip if fails
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except (UnicodeDecodeError, IOError):
+                continue
+            
             if fname.endswith('.py'):
                 py_content = content
             elif fname.endswith('.md'):
@@ -226,14 +236,20 @@ def full_deploy():
         skill_parser = SkillParser(py_content, md_content)
         skill_info = skill_parser.parse()
         
-        # 3. 配置
+        # 3. 配置 - 自动转换服务名称为英文 slug
+        import re
+        raw_name = service_config.get('name', f'report-{upload_id}')
+        safe_name = re.sub(r'[^a-z0-9]+', '-', raw_name.lower()).strip('-')
+        if not safe_name:
+            safe_name = f'report-{upload_id}'
+        
         default_config = {
-            'name': service_config.get('name', f'report-{upload_id}'),
+            'name': safe_name,
             'title': service_config.get('title', html_info['title']),
             'datacenter': service_config.get('datacenter', 'default'),
             'refresh_strategy': service_config.get('refresh_strategy', 'cron'),
             'refresh_cron': service_config.get('refresh_cron', '0 */6 * * *'),
-            'path': service_config.get('path', f"/reports/report-{upload_id}"),
+            'path': service_config.get('path', f"/reports/{safe_name}"),
         }
         
         # 4. 转化
@@ -264,6 +280,7 @@ def full_deploy():
         )
         nginx_mgr.reload_nginx()
         
+        # 7. 返回结果（构建和启动需要较长时间，建议手动执行）
         return jsonify({
             'success': True,
             'service_name': default_config['name'],
@@ -271,7 +288,9 @@ def full_deploy():
             'port': port,
             'path': default_config['path'],
             'access_url': f"http://localhost{default_config['path']}",
-            'message': '服务已生成并部署，请手动启动容器'
+            'message': '服务代码已生成并部署到Nginx，请手动构建和启动容器',
+            'build_command': f"cd {service_dir}/app && docker build -t report-service-{default_config['name']} .",
+            'start_command': f"docker run -d --name report-svc-{default_config['name']} --network report-transformer-platform_report-platform -p {port}:5000 -v {service_dir}/config.yml:/app/config.yml:ro report-service-{default_config['name']}"
         })
     
     except Exception as e:

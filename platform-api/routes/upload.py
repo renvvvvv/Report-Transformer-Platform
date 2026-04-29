@@ -6,6 +6,8 @@
 
 import os
 import uuid
+import zipfile
+import shutil
 from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 
@@ -114,8 +116,40 @@ def upload_bundle():
         saved_skills = []
         for sf in skill_files:
             if sf and allowed_file(sf.filename, ALLOWED_SKILL_EXTENSIONS):
-                sf.save(os.path.join(skill_dir, secure_filename(sf.filename)))
+                saved_path = os.path.join(skill_dir, secure_filename(sf.filename))
+                sf.save(saved_path)
                 saved_skills.append(sf.filename)
+                
+                # 如果是ZIP文件，解压它
+                if sf.filename.endswith('.zip'):
+                    try:
+                        with zipfile.ZipFile(saved_path, 'r') as z:
+                            # 解压到skill_dir
+                            z.extractall(skill_dir)
+                        # 删除ZIP文件
+                        os.remove(saved_path)
+                        saved_skills.append(f"[unzipped: {sf.filename}]")
+                    except Exception as e:
+                        saved_skills.append(f"[unzip failed: {str(e)}]")
+        
+        # 清理 __MACOSX 目录
+        macosx_dir = os.path.join(skill_dir, '__MACOSX')
+        if os.path.exists(macosx_dir):
+            shutil.rmtree(macosx_dir)
+        
+        # 如果skill_dir下有子目录（如中文名文件夹），把文件移到根目录
+        for item in os.listdir(skill_dir):
+            item_path = os.path.join(skill_dir, item)
+            if os.path.isdir(item_path) and item != '__pycache__':
+                # 移动子目录中的文件到skill_dir根目录
+                for root, dirs, files in os.walk(item_path):
+                    for f in files:
+                        src = os.path.join(root, f)
+                        dst = os.path.join(skill_dir, f)
+                        if not os.path.exists(dst):
+                            shutil.move(src, dst)
+                # 删除空子目录
+                shutil.rmtree(item_path)
         
         return jsonify({
             'success': True,

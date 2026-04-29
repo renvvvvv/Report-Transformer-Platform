@@ -5,6 +5,7 @@
 """
 
 import os
+import re
 import json
 from flask import Blueprint, request, jsonify
 
@@ -49,8 +50,17 @@ def parse_upload():
         if os.path.exists(skill_dir):
             for fname in os.listdir(skill_dir):
                 fpath = os.path.join(skill_dir, fname)
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    content = f.read()
+                
+                # Skip binary files and hidden files
+                if fname.startswith('.') or fname.endswith('.pyc') or fname.endswith('.DS_Store'):
+                    continue
+                
+                # Try to read as text, skip if fails
+                try:
+                    with open(fpath, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                except (UnicodeDecodeError, IOError):
+                    continue
                 
                 if fname.endswith('.py'):
                     py_content = content
@@ -126,8 +136,18 @@ def generate_service():
         
         for fname in os.listdir(skill_dir):
             fpath = os.path.join(skill_dir, fname)
-            with open(fpath, 'r', encoding='utf-8') as f:
-                content = f.read()
+            
+            # Skip binary files and hidden files
+            if fname.startswith('.') or fname.endswith('.pyc') or fname.endswith('.DS_Store'):
+                continue
+            
+            # Try to read as text, skip if fails
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except (UnicodeDecodeError, IOError):
+                continue
+            
             if fname.endswith('.py'):
                 py_content = content
             elif fname.endswith('.md'):
@@ -140,15 +160,22 @@ def generate_service():
         skill_parser = SkillParser(py_content, md_content)
         skill_info = skill_parser.parse()
         
+        # 自动转换服务名称为英文 slug（支持中文转拼音风格）
+        raw_name = service_config.get('name', f'report-{upload_id}')
+        # Convert to safe docker/container name: lowercase, replace non-alphanumeric with -
+        safe_name = re.sub(r'[^a-z0-9]+', '-', raw_name.lower()).strip('-')
+        if not safe_name:
+            safe_name = f'report-{upload_id}'
+        
         # 设置默认服务配置
         default_config = {
-            'name': service_config.get('name', f'report-{upload_id}'),
+            'name': safe_name,
             'title': service_config.get('title', html_info['title']),
             'datacenter': service_config.get('datacenter', 'default'),
             'refresh_strategy': service_config.get('refresh_strategy', 'cron'),
             'refresh_cron': service_config.get('refresh_cron', '0 */6 * * *'),
             'refresh_interval': service_config.get('refresh_interval', 300),
-            'path': service_config.get('path', f"/reports/report-{upload_id}"),
+            'path': service_config.get('path', f"/reports/{safe_name}"),
         }
         
         # 执行转化
