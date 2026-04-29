@@ -10,12 +10,15 @@ import os
 import sys
 import json
 import traceback
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any
+
+# 北京时间时区
+CN_TIMEZONE = timezone(timedelta(hours=8))
 
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
-from apscheduler.schedulers.background import BackgroundScheduler
 
 # 导入数据模块
 from data_fetcher import DataFetcher
@@ -41,6 +44,7 @@ POINT_MAPPING = {{ config.point_mapping or {'A': '1.1.7.1', 'B': '1.1.8.1', 'C':
 
 # 刷新配置
 REFRESH_CRON = '{{ refresh_cron }}'
+REFRESH_INTERVAL = {{ config.refresh_interval or 300 }}  # 秒
 
 # ========== 初始化Flask ==========
 app = Flask(__name__)
@@ -70,17 +74,43 @@ cache = {
     'is_updating': False
 }
 
-# ========== 定时任务 ==========
-scheduler = BackgroundScheduler()
+# ========== 定时刷新（使用 threading.Timer）==========
+_refresh_timer = None
+
+def _schedule_next_refresh():
+    """调度下一次刷新"""
+    global _refresh_timer
+    _refresh_timer = threading.Timer(REFRESH_INTERVAL, _auto_refresh)
+    _refresh_timer.daemon = True
+    _refresh_timer.start()
+
+def _auto_refresh():
+    """自动刷新数据"""
+    try:
+        refresh_data()
+    finally:
+        _schedule_next_refresh()
+
+def now_cn():
+    """获取北京时间"""
+    return datetime.now(CN_TIMEZONE)
+
+def format_cn(dt):
+    """格式化为北京时间字符串"""
+    if dt is None:
+        return '--'
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(CN_TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')
 
 def refresh_data():
     """定时刷新数据"""
     if cache['is_updating']:
-        print("[WARN] 上一次刷新尚未完成，跳过本次")
+        print("[WARN] 上一次刷新尚未完成，跳过本次", flush=True)
         return
     
     cache['is_updating'] = True
-    print(f"[INFO] 开始刷新数据: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[INFO] 开始刷新数据: {format_cn(now_cn())}", flush=True)
     
     try:
         # 1. 拉取数据
@@ -112,16 +142,16 @@ def refresh_data():
         # 3. 更新缓存
         cache['devices'] = devices
         cache['summary'] = summary
-        cache['last_update'] = datetime.now()
+        cache['last_update'] = now_cn()
         
         # 4. 保存到文件（持久化）
         save_cache()
         
-        print(f"[INFO] 数据刷新完成: {len(devices)} 台设备, 平均不平衡度 {summary.get('avg_unbalance', 0)}%")
+        print(f"[INFO] 数据刷新完成: {len(devices)} 台设备, 平均不平衡度 {summary.get('avg_unbalance', 0)}%", flush=True)
     
     except Exception as e:
-        print(f"[ERROR] 数据刷新失败: {str(e)}")
-        print(traceback.format_exc())
+        print(f"[ERROR] 数据刷新失败: {str(e)}", flush=True)
+        print(traceback.format_exc(), flush=True)
     
     finally:
         cache['is_updating'] = False
@@ -138,7 +168,7 @@ def save_cache():
                 'last_update': cache['last_update'].isoformat() if cache['last_update'] else None
             }, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[WARN] 缓存保存失败: {e}")
+        print(f"[WARN] 缓存保存失败: {e}", flush=True)
 
 def load_cache():
     """从文件加载缓存"""
@@ -151,9 +181,9 @@ def load_cache():
                 cache['summary'] = data.get('summary', {})
                 if data.get('last_update'):
                     cache['last_update'] = datetime.fromisoformat(data['last_update'])
-                print(f"[INFO] 从缓存加载: {len(cache['devices'])} 台设备")
+                print(f"[INFO] 从缓存加载: {len(cache['devices'])} 台设备", flush=True)
     except Exception as e:
-        print(f"[WARN] 缓存加载失败: {e}")
+        print(f"[WARN] 缓存加载失败: {e}", flush=True)
 
 # ========== 路由 ==========
 
@@ -171,7 +201,7 @@ def index():
         summary=summary,
         devices=abnormal_devices,
         all_devices=devices,
-        refresh_time=cache['last_update'].strftime('%Y-%m-%d %H:%M:%S') if cache['last_update'] else '--',
+        refresh_time=format_cn(cache['last_update']),
         datacenter=DATACENTER,
         total_devices=len(devices),
         abnormal_count=len(abnormal_devices)
@@ -192,7 +222,7 @@ def api_data():
         'devices': abnormal_devices,
         'total_devices': len(devices),
         'abnormal_count': len(abnormal_devices),
-        'refresh_time': cache['last_update'].strftime('%Y-%m-%d %H:%M:%S') if cache['last_update'] else '--',
+        'refresh_time': format_cn(cache['last_update']),
         'is_updating': cache['is_updating']
     })
 
@@ -211,7 +241,7 @@ def api_refresh():
         'success': True,
         'message': '刷新完成',
         'summary': cache.get('summary', {}),
-        'refresh_time': cache['last_update'].strftime('%Y-%m-%d %H:%M:%S') if cache['last_update'] else '--'
+        'refresh_time': format_cn(cache['last_update'])
     })
 
 @app.route('/api/devices')
@@ -231,7 +261,8 @@ def api_config():
         'service_name': SERVICE_NAME,
         'datacenter': DATACENTER,
         'refresh_cron': REFRESH_CRON,
-        'last_update': cache['last_update'].isoformat() if cache['last_update'] else None,
+        'refresh_interval': REFRESH_INTERVAL,
+        'last_update': format_cn(cache['last_update']),
         'thresholds': {{ calculation.thresholds or {'abnormal': 15, 'critical': 40} }}
     })
 
@@ -241,7 +272,7 @@ def health():
     return jsonify({
         'status': 'healthy',
         'service': SERVICE_NAME,
-        'last_update': cache['last_update'].isoformat() if cache['last_update'] else None,
+        'last_update': format_cn(cache['last_update']),
         'device_count': len(cache.get('devices', []))
     })
 
@@ -258,20 +289,15 @@ if __name__ == '__main__':
     
     # 首次刷新
     if not cache['devices']:
-        print("[INFO] 首次运行，立即刷新数据...")
+        print("[INFO] 首次运行，立即刷新数据...", flush=True)
         refresh_data()
+    else:
+        print(f"[INFO] 从缓存加载: {len(cache['devices'])} 台设备, 最后更新: {format_cn(cache['last_update'])}", flush=True)
     
-    # 启动定时任务
-    scheduler.add_job(
-        func=refresh_data,
-        trigger='cron',
-        minute='5',
-        hour='2',
-        id='daily_refresh'
-    )
-    scheduler.start()
-    print(f"[INFO] 定时任务已启动: {REFRESH_CRON}")
+    # 启动定时任务（使用 threading.Timer）
+    _schedule_next_refresh()
+    print(f"[INFO] 定时任务已启动: 每 {REFRESH_INTERVAL} 秒刷新一次", flush=True)
     
     # 启动Flask（使用动态端口）
-    print(f"[INFO] 服务启动: http://0.0.0.0:{args.port}")
+    print(f"[INFO] 服务启动: http://0.0.0.0:{args.port}", flush=True)
     app.run(host='0.0.0.0', port=args.port, debug=False, threaded=True)

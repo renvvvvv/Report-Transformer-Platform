@@ -112,13 +112,20 @@ class ServiceRunner:
             env['SERVICE_NAME'] = service_name
             env['PYTHONPATH'] = os.path.join(service_dir, 'app')
             
-            # 启动子进程
+            # 启动子进程 - 输出重定向到日志文件，避免PIPE缓冲区满导致阻塞
+            log_file = os.path.join(service_dir, 'app.log')
+            log_fp = open(log_file, 'a', encoding='utf-8')
+            log_fp.write(f"\n{'='*60}\n")
+            log_fp.write(f"[START] Service {service_name} started at {datetime.now().isoformat()}\n")
+            log_fp.write(f"[START] Port: {port}, PID: will be assigned\n")
+            log_fp.flush()
+            
             process = subprocess.Popen(
                 [sys.executable, app_file, '--port', str(port)],
                 cwd=os.path.join(service_dir, 'app'),
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=log_fp,
+                stderr=subprocess.STDOUT,  # 合并stderr到stdout
                 start_new_session=True  # 创建新进程组，避免被父进程信号影响
             )
             
