@@ -39,6 +39,13 @@ class NginxManager:
         if not service_path.endswith('/'):
             service_path = service_path + '/'
         
+        # 安全检查：路径不能是太宽泛的通配（如 /reports/ 会匹配所有 /reports/xxx）
+        path_parts = [p for p in service_path.split('/') if p]
+        if len(path_parts) < 2:
+            print(f"[WARN] 服务路径太短，可能冲突: {service_path}")
+            # 强制加上服务名
+            service_path = f'/reports/{service_name}/'
+        
         # 读取现有配置
         existing_config = self._read_services_conf()
         
@@ -122,10 +129,14 @@ class NginxManager:
     
     def _generate_route_block(self, service_name: str, service_path: str,
                               container_name: str, port: int) -> str:
-        """生成单个路由配置块"""
+        """生成单个路由配置块 - 使用 platform-api 作为上游（子进程运行在平台容器内）"""
+        # 确保路径以/结尾
+        if not service_path.endswith('/'):
+            service_path = service_path + '/'
+        
         return f'''# Service: {service_name}
 location {service_path} {{
-    proxy_pass http://{container_name}:{port}/;
+    proxy_pass http://platform-api:{port}/;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

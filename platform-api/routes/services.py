@@ -7,7 +7,7 @@
 import os
 from flask import Blueprint, request, jsonify
 
-from core.docker_generator import DockerGenerator
+from core.service_runner import ServiceRunner
 from core.nginx_manager import NginxManager
 
 services_bp = Blueprint('services', __name__)
@@ -15,8 +15,8 @@ services_bp = Blueprint('services', __name__)
 SERVICES_DIR = os.environ.get('SERVICES_DIR', '/app/services')
 
 
-def get_docker_generator():
-    return DockerGenerator(SERVICES_DIR)
+def get_service_runner():
+    return ServiceRunner(SERVICES_DIR)
 
 
 def get_nginx_manager():
@@ -26,8 +26,8 @@ def get_nginx_manager():
 @services_bp.route('/services', methods=['GET'])
 def list_services():
     """列出所有服务"""
-    docker_gen = get_docker_generator()
-    services = docker_gen.list_services()
+    runner = get_service_runner()
+    services = runner.list_services()
     
     return jsonify({
         'success': True,
@@ -39,8 +39,8 @@ def list_services():
 @services_bp.route('/services/<service_name>', methods=['GET'])
 def get_service(service_name):
     """获取单个服务详情"""
-    docker_gen = get_docker_generator()
-    status = docker_gen.get_service_status(service_name)
+    runner = get_service_runner()
+    status = runner.get_service_status(service_name)
     
     # 读取配置
     import yaml
@@ -70,8 +70,9 @@ def get_service(service_name):
             'name': service_name,
             'title': config.get('title', service_name),
             'status': status['status'],
-            'container_id': status.get('container_id', ''),
-            'uptime': status.get('uptime', ''),
+            'pid': status.get('pid'),
+            'port': status.get('port'),
+            'started_at': status.get('started_at'),
             'config': config,
             'mapping': mapping
         }
@@ -81,28 +82,16 @@ def get_service(service_name):
 @services_bp.route('/services/<service_name>/logs', methods=['GET'])
 def get_service_logs(service_name):
     """获取服务日志"""
-    tail = request.args.get('tail', '100')
+    tail = request.args.get('tail', '50')
     
-    import subprocess
-    try:
-        result = subprocess.run(
-            ['docker', 'logs', '--tail', tail, service_name],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        
-        return jsonify({
-            'success': True,
-            'service_name': service_name,
-            'logs': result.stdout if result.returncode == 0 else result.stderr
-        })
+    runner = get_service_runner()
+    logs = runner.get_service_logs(service_name, tail=int(tail))
     
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'获取日志失败: {str(e)}'
-        }), 500
+    return jsonify({
+        'success': True,
+        'service_name': service_name,
+        'logs': logs
+    })
 
 
 @services_bp.route('/services/<service_name>/config', methods=['PUT'])

@@ -621,7 +621,7 @@ async function parseUpload(){
       document.getElementById('skillParseResult').innerHTML='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(148,163,184,0.08)"><span>📛 名称</span><span style="color:#e2e8f0">'+r.skill.name+'</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(148,163,184,0.08)"><span>🔌 数据源</span><span style="color:#e2e8f0">'+r.skill.data_source_type+'</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(148,163,184,0.08)"><span>📡 拉取步骤</span><span style="color:#e2e8f0">'+r.skill.fetch_steps_count+' 步</span></div><div style="display:flex;justify-content:space-between;padding:6px 0"><span>🧮 计算公式</span><span style="color:#e2e8f0">'+(r.skill.calculation_formula||'无')+'</span></div>';
       const dcSelect=document.getElementById('datacenterSelect');
       dcSelect.innerHTML=r.skill.datacenters.map(dc=>'<option value="'+dc+'">'+dc+'</option>').join('')||'<option value="default">默认</option>';
-      document.getElementById('serviceName').value=r.skill.name?r.skill.name.toLowerCase().replace(/\\\\s+/g,'-').replace(/[^a-z0-9-]/g,''):'report-'+currentUploadId;
+      const rawName=r.skill.name||'report-'+currentUploadId;const safeName=rawName.toLowerCase().replace(/\s+/g,'-').replace(/^-+|-+$/g,'')||'report-'+currentUploadId;document.getElementById('serviceName').value=safeName;
       
       updateProcessStep(1,'done','解析成功');
       appendProcessLog('解析完成，请配置服务参数','success');
