@@ -50,8 +50,8 @@ class Transformer:
         # 3. 生成计算模块
         calculator = self._generate_calculator(skill_info)
         
-        # 4. 生成动态HTML（将静态数据替换为模板变量）
-        dynamic_html = self._generate_dynamic_html(html_info, mapping)
+        # 4. 生成动态HTML（使用Jinja2模板）
+        dynamic_html = self._generate_dynamic_html(html_info, mapping, service_config)
         
         # 5. 生成Flask主应用
         flask_app = self._generate_flask_app(html_info, skill_info, mapping, service_config)
@@ -169,49 +169,31 @@ class Transformer:
         
         return template.render(**context)
     
-    def _generate_dynamic_html(self, html_info: Dict[str, Any], mapping: Dict[str, Any]) -> str:
-        """将静态HTML转化为动态模板"""
-        raw_html = html_info.get('raw_html', '')
+    def _generate_dynamic_html(self, html_info: Dict[str, Any], mapping: Dict[str, Any], 
+                                 service_config: Dict[str, Any] = None) -> str:
+        """生成动态HTML模板 - 直接返回Jinja2模板源码，由Flask在请求时渲染"""
+        if service_config is None:
+            service_config = {}
         
-        # 1. 将硬编码数据替换为Jinja2模板变量
-        # 统计卡片数值
-        for key, info in mapping.get('stat_cards', {}).items():
-            # 查找并替换对应的数值
-            value_pattern = rf'(<[^>]*class="[^"]*stat-value[^"]*"[^>]*>)([^<]+)(</[^>]*>)'
-            # 这里简化处理，实际应该更精确匹配
+        template = self.env.get_template('index.html.j2')
         
-        # 2. 将内嵌数据数组替换为模板变量
-        raw_html = re.sub(
-            r'const\s+\w+Data\s*=\s*\[.*?\];',
-            'const abnormalData = {{ data_json|safe }};',
-            raw_html,
-            flags=re.DOTALL
+        # 直接读取模板源码，不做渲染（保留Jinja2语法）
+        template_path = os.path.join(self.template_dir, 'index.html.j2')
+        with open(template_path, 'r', encoding='utf-8') as f:
+            template_source = f.read()
+        
+        # 只替换模板中的静态配置项（标题、数据中心等）
+        # 使用占位符标记，后续用字符串替换
+        template_source = template_source.replace(
+            '{{ title }}',
+            html_info.get('title', '动态报表')
+        )
+        template_source = template_source.replace(
+            '{{ datacenter }}',
+            service_config.get('datacenter', 'default')
         )
         
-        # 3. 添加动态刷新脚本
-        refresh_script = self._generate_refresh_script(mapping)
-        
-        # 4. 在</body>前插入刷新脚本
-        if '</body>' in raw_html:
-            raw_html = raw_html.replace('</body>', refresh_script + '\n</body>')
-        
-        # 5. 将静态统计值替换为模板变量
-        # 有效设备数
-        raw_html = self._replace_stat_value(raw_html, r'有效设备', '{{ summary.valid_count }}')
-        raw_html = self._replace_stat_value(raw_html, r'平均不平衡度', '{{ summary.avg_unbalance }}%')
-        raw_html = self._replace_stat_value(raw_html, r'最大不平衡度', '{{ summary.max_unbalance }}%')
-        raw_html = self._replace_stat_value(raw_html, r'异常设备', '{{ summary.abnormal_count }}')
-        
-        # 6. 替换刷新时间
-        raw_html = raw_html.replace(
-            'id="refreshTime">--',
-            'id="refreshTime">{{ refresh_time }}'
-        )
-        
-        # 7. 替换结论区域
-        raw_html = self._replace_conclusions(raw_html, mapping)
-        
-        return raw_html
+        return template_source
     
     def _replace_stat_value(self, html: str, label_pattern: str, template_var: str) -> str:
         """替换统计卡片的数值"""

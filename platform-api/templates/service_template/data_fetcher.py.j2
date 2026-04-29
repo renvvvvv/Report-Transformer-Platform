@@ -163,7 +163,7 @@ class DataFetcher:
         
         for point in all_points:
             ins_standard_id = point.get('insStandardId')
-            extends_name = point.get('extendsName', '')
+            extends_name = point.get('extendsName') or ''
             
             if not ins_standard_id or ins_standard_id not in device_map:
                 continue
@@ -175,11 +175,11 @@ class DataFetcher:
             }
             
             # 根据extendsName或point_mapping匹配相位
-            if 'A' in extends_name or extends_name == point_mapping.get('A'):
+            if extends_name and ('A' in extends_name or extends_name == point_mapping.get('A')):
                 device_map[ins_standard_id]['A'] = point_info
-            elif 'B' in extends_name or extends_name == point_mapping.get('B'):
+            elif extends_name and ('B' in extends_name or extends_name == point_mapping.get('B')):
                 device_map[ins_standard_id]['B'] = point_info
-            elif 'C' in extends_name or extends_name == point_mapping.get('C'):
+            elif extends_name and ('C' in extends_name or extends_name == point_mapping.get('C')):
                 device_map[ins_standard_id]['C'] = point_info
         
         return device_map
